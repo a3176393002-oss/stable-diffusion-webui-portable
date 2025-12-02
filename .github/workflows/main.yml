@@ -1,4 +1,4 @@
-name: SD Unfiltered (No Disk Full)
+name: SD Unfiltered Anime (Fixed Model Load)
 
 on:
   workflow_dispatch:
@@ -22,35 +22,39 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Free disk space (关键一步！)
+      - name: Free disk space (清垃圾)
         run: |
-          sudo rm -rf /usr/share/dotnet
-          sudo rm -rf /opt/ghc
-          sudo rm -rf "/usr/local/share/boost"
-          sudo rm -rf "$AGENT_TOOLSDIRECTORY"
-          df -h
+          sudo rm -rf /usr/share/dotnet /opt/ghc "/usr/local/share/boost" "$AGENT_TOOLSDIRECTORY"
+          df -h  # 检查空间
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
 
-      - name: Install tiny libs
+      - name: Install libs (no cache to save space)
         run: |
           pip install --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cu118
-          pip install --no-cache-dir diffusers transformers accelerate safetensors
+          pip install --no-cache-dir diffusers[torch] transformers accelerate safetensors ftfy
 
-      - name: Generate 4 images (no safety checker)
+      - name: Download Anything V4.5 model (2GB anime unfiltered)
+        run: |
+          wget -O anything-v4.5-pruned.safetensors https://huggingface.co/andite/anything-v4.0/resolve/main/anything-v4.5-pruned.safetensors
+
+      - name: Generate images (no safety checker)
         run: |
           python - <<'EOF'
-          import torch, random, os
+          import torch
+          import random
           from diffusers import StableDiffusionPipeline
+          from safetensors.torch import load_file
 
-          model_id = "ckpt/anything-v4.5-pruned"           # 只要 2.1GB！
-          pipe = StableDiffusionPipeline.from_pretrained(
-              model_id,
+          # 直接从 safetensors 文件加载 Anything V4.5 (动漫专用，无过滤)
+          pipe = StableDiffusionPipeline.from_single_file(
+              "anything-v4.5-pruned.safetensors",
               torch_dtype=torch.float16,
-              safety_checker=None,          # 彻底关闭过滤
+              use_safetensors=True,
+              safety_checker=None,  # 彻底关闭 NSFW 过滤
               requires_safety_checker=False
           )
           pipe.to("cuda")
@@ -62,15 +66,20 @@ jobs:
 
           for i in range(num):
               seed = random.randint(1, 999999999)
-              image = pipe(prompt, negative_prompt=negative, num_inference_steps=steps,
-                           generator=torch.Generator("cuda").manual_seed(seed)).images[0]
+              gen = torch.Generator("cuda").manual_seed(seed)
+              image = pipe(
+                  prompt, 
+                  negative_prompt=negative, 
+                  num_inference_steps=steps,
+                  generator=gen
+              ).images[0]
               image.save(f"output_{i+1}.png")
-              print(f"第 {i+1} 张生成完毕")
+              print(f"Generated output_{i+1}.png - Seed: {seed}")
           EOF
 
       - name: Upload images
         uses: actions/upload-artifact@v4
         with:
-          name: uncensored-images
+          name: anime-uncensored-images
           path: output_*.png
-          
+          retention-days: 7
